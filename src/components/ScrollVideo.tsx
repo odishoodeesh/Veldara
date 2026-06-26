@@ -129,6 +129,8 @@ export default function ScrollVideo() {
         const tempVideo = document.createElement("video");
         tempVideo.muted = true;
         tempVideo.playsInline = true;
+        tempVideo.setAttribute("webkit-playsinline", "true");
+        tempVideo.controls = false;
         tempVideo.crossOrigin = "anonymous";
         tempVideo.preload = "auto";
         
@@ -397,6 +399,7 @@ export default function ScrollVideo() {
         ref={videoFallbackRef}
         muted
         playsInline
+        controls={false}
         autoPlay
         loop
         preload="auto"
