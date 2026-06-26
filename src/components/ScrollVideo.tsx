@@ -154,8 +154,18 @@ export default function ScrollVideo() {
 
           if (!active) return;
 
-          // Scaling video frames slightly to preserve pristine quality while saving memory
-          const maxDimension = 1280;
+          // Warm up the encoder for decoding operations
+          try {
+            await tempVideo.play();
+            tempVideo.pause();
+          } catch (warmupErr) {
+            console.warn("tempVideo play/pause warmup failed:", warmupErr);
+          }
+
+          // Set maxDimension dynamically to prevent Safari canvas memory crashes on mobile devices
+          const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+          const maxDimension = isMobile ? 720 : 1280;
+
           const scale = Math.min(1, maxDimension / tempVideo.videoWidth);
           const scaledWidth = Math.round(tempVideo.videoWidth * scale);
           const scaledHeight = Math.round(tempVideo.videoHeight * scale);
@@ -170,15 +180,32 @@ export default function ScrollVideo() {
             tempVideo.currentTime = time;
 
             await new Promise<void>((resolve) => {
-              const onSeeked = () => {
-                tempVideo.removeEventListener("seeked", onSeeked);
+              let resolved = false;
+              const done = () => {
+                if (resolved) return;
+                resolved = true;
                 resolve();
               };
+
+              // Use modern presentation callback if available for precise hardware frame presentation sync
+              if ("requestVideoFrameCallback" in tempVideo) {
+                (tempVideo as any).requestVideoFrameCallback(() => {
+                  done();
+                });
+              }
+
+              const onSeeked = () => {
+                tempVideo.removeEventListener("seeked", onSeeked);
+                if (!("requestVideoFrameCallback" in tempVideo)) {
+                  done();
+                }
+              };
+
               tempVideo.addEventListener("seeked", onSeeked);
               setTimeout(() => {
                 tempVideo.removeEventListener("seeked", onSeeked);
-                resolve(); // resolve anyway to avoid hanging indefinitely if seek stalls
-              }, 800);
+                done(); // safety fallback
+              }, 600);
             });
 
             try {
@@ -244,6 +271,37 @@ export default function ScrollVideo() {
       });
     };
   }, []);
+
+  // Warm up the fallback video element on iOS Safari to activate hardware decoding
+  useEffect(() => {
+    const video = videoFallbackRef.current;
+    if (!video) return;
+
+    const warmUpVideo = async () => {
+      try {
+        video.currentTime = 0.01; // Tiny seek to force a frame decode
+        await video.play();
+        video.pause();
+      } catch (err) {
+        console.warn("Native video fallback decoder warm-up failed:", err);
+      }
+    };
+
+    const handleCanPlay = () => {
+      warmUpVideo();
+      video.removeEventListener("canplay", handleCanPlay);
+    };
+
+    if (video.readyState >= 2) {
+      warmUpVideo();
+    } else {
+      video.addEventListener("canplay", handleCanPlay);
+    }
+
+    return () => {
+      video.removeEventListener("canplay", handleCanPlay);
+    };
+  }, [resolvedVideoUrl]);
 
   // Frame tick animation loop with silky-smooth progress interpolation (lerping)
   useEffect(() => {
@@ -339,6 +397,8 @@ export default function ScrollVideo() {
         ref={videoFallbackRef}
         muted
         playsInline
+        autoPlay
+        loop
         preload="auto"
         src={resolvedVideoUrl}
         className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${
