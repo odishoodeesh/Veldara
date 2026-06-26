@@ -1,0 +1,6 @@
+{
+  "name": "ASHUR",
+  "description": "Immersive 3D web experience showcasing smooth scroll-driven video playback, interactive ambient particles, and elegant layout animations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
