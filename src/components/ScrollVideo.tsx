@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 
-const VIDEO_URL = "/api/video";
+const REMOTE_VIDEO_URL =
+  "https://www.image2url.com/r2/default/videos/1782479002426-81d17bc5-d96b-4f39-aac4-2511994264ab.mp4";
+const LOCAL_PROXY_URL = "/api/video";
 
 export default function ScrollVideo() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -9,6 +11,7 @@ export default function ScrollVideo() {
 
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [preloadProgress, setPreloadProgress] = useState(0);
+  const [resolvedVideoUrl, setResolvedVideoUrl] = useState(LOCAL_PROXY_URL);
 
   // References to keep render loop in sync without re-triggering effects
   const framesRef = useRef<ImageBitmap[]>([]);
@@ -91,16 +94,32 @@ export default function ScrollVideo() {
     return () => observer.disconnect();
   }, []);
 
-  // Frame extraction effect with robust same-origin caching
+  // Frame extraction effect with robust same-origin caching and external fallbacks
   useEffect(() => {
     let active = true;
     let objectUrl = "";
 
     async function extractFrames() {
+      let currentUrl = LOCAL_PROXY_URL;
       try {
-        const response = await fetch(VIDEO_URL);
-        if (!response.ok) {
-          throw new Error(`Proxy video fetch failed with status: ${response.status}`);
+        let response: Response;
+        try {
+          response = await fetch(currentUrl);
+          if (!response.ok) {
+            throw new Error("Local video proxy endpoint returned non-OK status.");
+          }
+        } catch (proxyErr) {
+          console.warn(
+            "Local video proxy is not available (common on static platforms like Cloudflare Pages). Falling back to direct remote URL.",
+            proxyErr
+          );
+          currentUrl = REMOTE_VIDEO_URL;
+          setResolvedVideoUrl(REMOTE_VIDEO_URL);
+          // Try fetching directly from the remote URL with CORS
+          response = await fetch(currentUrl, { mode: "cors" });
+          if (!response.ok) {
+            throw new Error("Direct fetch of remote video URL failed.");
+          }
         }
 
         const blob = await response.blob();
@@ -168,7 +187,14 @@ export default function ScrollVideo() {
           setIsPreloaded(true);
         }
       } catch (err) {
-        console.warn("High-performance scroll-video preload failed. Falling back to native seeking.", err);
+        console.warn(
+          "High-performance scroll-video pre-rendering failed. Falling back to native scrolling using direct remote URL.",
+          err
+        );
+        if (active) {
+          setResolvedVideoUrl(REMOTE_VIDEO_URL);
+          setIsPreloaded(false);
+        }
       }
     }
 
@@ -279,7 +305,7 @@ export default function ScrollVideo() {
         muted
         playsInline
         preload="auto"
-        src={VIDEO_URL}
+        src={resolvedVideoUrl}
         className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${
           isPreloaded ? "opacity-0 pointer-events-none" : "opacity-100"
         }`}
