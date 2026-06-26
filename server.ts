@@ -6,24 +6,53 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Proxy route to bypass CORS for the high-performance video scrubbing
+  // Proxy route to bypass CORS and support HTTP range requests for iOS Safari
+  let videoCache: Buffer | null = null;
+  const videoUrl = "https://www.image2url.com/r2/default/videos/1782479002426-81d17bc5-d96b-4f39-aac4-2511994264ab.mp4";
+
   app.get("/api/video", async (req, res) => {
-    const videoUrl = "https://www.image2url.com/r2/default/videos/1782479002426-81d17bc5-d96b-4f39-aac4-2511994264ab.mp4";
     try {
-      const response = await fetch(videoUrl);
-      if (!response.ok) {
-        res.status(response.status).send("Failed to fetch video from remote source.");
-        return;
+      if (!videoCache) {
+        const response = await fetch(videoUrl);
+        if (!response.ok) {
+          res.status(response.status).send("Failed to fetch video from remote source.");
+          return;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        videoCache = Buffer.from(arrayBuffer);
       }
 
-      const buffer = await response.arrayBuffer();
-      
-      // Set headers to support caching and prevent any CORS blocking
-      res.setHeader("Content-Type", "video/mp4");
+      const totalLength = videoCache.length;
+      const range = req.headers.range;
+
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      
-      res.send(Buffer.from(buffer));
+      res.setHeader("Accept-Ranges", "bytes");
+
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1;
+
+        if (start >= totalLength || end >= totalLength) {
+          res.writeHead(416, { "Content-Range": `bytes */${totalLength}` });
+          return res.end();
+        }
+
+        const chunksize = (end - start) + 1;
+        res.writeHead(206, {
+          "Content-Range": `bytes ${start}-${end}/${totalLength}`,
+          "Content-Length": chunksize,
+          "Content-Type": "video/mp4",
+        });
+        res.end(videoCache.subarray(start, end + 1));
+      } else {
+        res.writeHead(200, {
+          "Content-Length": totalLength,
+          "Content-Type": "video/mp4",
+        });
+        res.end(videoCache);
+      }
     } catch (err) {
       console.error("Error proxying video:", err);
       res.status(500).send("Error proxying video file.");

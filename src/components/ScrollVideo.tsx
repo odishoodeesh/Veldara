@@ -14,7 +14,7 @@ export default function ScrollVideo() {
   const [resolvedVideoUrl, setResolvedVideoUrl] = useState(LOCAL_PROXY_URL);
 
   // References to keep render loop in sync without re-triggering effects
-  const framesRef = useRef<ImageBitmap[]>([]);
+  const framesRef = useRef<(ImageBitmap | HTMLCanvasElement)[]>([]);
   const framesReadyRef = useRef<boolean>(false);
   const videoSeekingRef = useRef<boolean>(false);
   const lastFrameIdxRef = useRef<number>(-1);
@@ -47,8 +47,8 @@ export default function ScrollVideo() {
     }
   };
 
-  // Draw an ImageBitmap to the canvas, simulating object-fit: cover
-  const drawFrame = (canvas: HTMLCanvasElement, frame: ImageBitmap) => {
+  // Draw an ImageBitmap or offscreen canvas to the canvas, simulating object-fit: cover
+  const drawFrame = (canvas: HTMLCanvasElement, frame: ImageBitmap | HTMLCanvasElement) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -131,60 +131,91 @@ export default function ScrollVideo() {
         tempVideo.playsInline = true;
         tempVideo.crossOrigin = "anonymous";
         tempVideo.preload = "auto";
-        tempVideo.src = objectUrl;
-
-        await new Promise<void>((resolve, reject) => {
-          tempVideo.onloadedmetadata = () => resolve();
-          tempVideo.onerror = () => reject(new Error("Video load metadata failed"));
-          setTimeout(() => reject(new Error("Video load timeout")), 15000);
-        });
-
-        if (!active) return;
-
-        // Scaling video frames slightly to preserve pristine quality while saving memory
-        const maxDimension = 1280;
-        const scale = Math.min(1, maxDimension / tempVideo.videoWidth);
-        const scaledWidth = Math.round(tempVideo.videoWidth * scale);
-        const scaledHeight = Math.round(tempVideo.videoHeight * scale);
         
-        // Sample 30 frames per second of video duration (balanced frame count for extreme smoothness and fast pre-rendering)
-        const frameCount = Math.max(60, Math.min(150, Math.round(tempVideo.duration * 30)));
-        const extracted: ImageBitmap[] = [];
+        // Critical styling and mounting for iOS Safari background pre-rendering and decoding
+        tempVideo.style.position = "fixed";
+        tempVideo.style.top = "0";
+        tempVideo.style.left = "0";
+        tempVideo.style.width = "1px";
+        tempVideo.style.height = "1px";
+        tempVideo.style.opacity = "0.01";
+        tempVideo.style.pointerEvents = "none";
+        tempVideo.style.zIndex = "-9999";
+        document.body.appendChild(tempVideo);
 
-        for (let i = 0; i < frameCount; i++) {
-          if (!active) return;
-          const time = (i / (frameCount - 1)) * (tempVideo.duration - 0.05);
-          tempVideo.currentTime = time;
+        try {
+          tempVideo.src = objectUrl;
 
-          await new Promise<void>((resolve) => {
-            const onSeeked = () => {
-              tempVideo.removeEventListener("seeked", onSeeked);
-              resolve();
-            };
-            tempVideo.addEventListener("seeked", onSeeked);
-            setTimeout(() => {
-              tempVideo.removeEventListener("seeked", onSeeked);
-              resolve(); // resolve anyway to avoid hanging indefinitely if seek stalls
-            }, 800);
+          await new Promise<void>((resolve, reject) => {
+            tempVideo.onloadedmetadata = () => resolve();
+            tempVideo.onerror = () => reject(new Error("Video load metadata failed"));
+            setTimeout(() => reject(new Error("Video load timeout")), 15000);
           });
 
-          try {
-            const bitmap = await createImageBitmap(tempVideo, {
-              resizeWidth: scaledWidth,
-              resizeHeight: scaledHeight,
-            });
-            extracted.push(bitmap);
-          } catch (bitmapErr) {
-            console.warn("Failed to create image bitmap for frame", i, bitmapErr);
-          }
-          
-          setPreloadProgress(Math.round(((i + 1) / frameCount) * 100));
-        }
+          if (!active) return;
 
-        if (active && extracted.length > 0) {
-          framesRef.current = extracted;
-          framesReadyRef.current = true;
-          setIsPreloaded(true);
+          // Scaling video frames slightly to preserve pristine quality while saving memory
+          const maxDimension = 1280;
+          const scale = Math.min(1, maxDimension / tempVideo.videoWidth);
+          const scaledWidth = Math.round(tempVideo.videoWidth * scale);
+          const scaledHeight = Math.round(tempVideo.videoHeight * scale);
+          
+          // Sample 24 frames per second of video duration (optimized frame count for extreme smoothness and high compatibility)
+          const frameCount = Math.max(45, Math.min(95, Math.round(tempVideo.duration * 24)));
+          const extracted: (ImageBitmap | HTMLCanvasElement)[] = [];
+
+          for (let i = 0; i < frameCount; i++) {
+            if (!active) return;
+            const time = (i / (frameCount - 1)) * (tempVideo.duration - 0.05);
+            tempVideo.currentTime = time;
+
+            await new Promise<void>((resolve) => {
+              const onSeeked = () => {
+                tempVideo.removeEventListener("seeked", onSeeked);
+                resolve();
+              };
+              tempVideo.addEventListener("seeked", onSeeked);
+              setTimeout(() => {
+                tempVideo.removeEventListener("seeked", onSeeked);
+                resolve(); // resolve anyway to avoid hanging indefinitely if seek stalls
+              }, 800);
+            });
+
+            try {
+              let frameSource: ImageBitmap | HTMLCanvasElement;
+              try {
+                frameSource = await createImageBitmap(tempVideo, {
+                  resizeWidth: scaledWidth,
+                  resizeHeight: scaledHeight,
+                });
+              } catch (bitmapErr) {
+                console.warn("createImageBitmap failed, falling back to offscreen canvas rendering:", bitmapErr);
+                const offscreen = document.createElement("canvas");
+                offscreen.width = scaledWidth;
+                offscreen.height = scaledHeight;
+                const ctx = offscreen.getContext("2d");
+                if (ctx) {
+                  ctx.drawImage(tempVideo, 0, 0, scaledWidth, scaledHeight);
+                }
+                frameSource = offscreen;
+              }
+              extracted.push(frameSource);
+            } catch (frameErr) {
+              console.warn("Failed to extract frame", i, frameErr);
+            }
+            
+            setPreloadProgress(Math.round(((i + 1) / frameCount) * 100));
+          }
+
+          if (active && extracted.length > 0) {
+            framesRef.current = extracted;
+            framesReadyRef.current = true;
+            setIsPreloaded(true);
+          }
+        } finally {
+          if (tempVideo && tempVideo.parentNode) {
+            tempVideo.parentNode.removeChild(tempVideo);
+          }
         }
       } catch (err) {
         console.warn(
@@ -205,8 +236,12 @@ export default function ScrollVideo() {
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
-      // Clean up extracted bitmaps
-      framesRef.current.forEach((bitmap) => bitmap.close());
+      // Clean up extracted bitmaps/canvases
+      framesRef.current.forEach((frame) => {
+        if (typeof (frame as any).close === "function") {
+          (frame as any).close();
+        }
+      });
     };
   }, []);
 
