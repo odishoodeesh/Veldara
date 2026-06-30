@@ -8,7 +8,31 @@ async function startServer() {
 
   // Proxy route to bypass CORS and support HTTP range requests for iOS Safari
   let videoCache: Buffer | null = null;
-  const videoUrl = "https://www.image2url.com/r2/default/videos/1782479002426-81d17bc5-d96b-4f39-aac4-2511994264ab.mp4";
+  const videoUrl = "https://video.zig.ht/api/videos/file/1782828823690-293268447.mp4";
+
+  app.get("/api/test-video", async (req, res) => {
+    try {
+      console.log("Testing fetch for:", videoUrl);
+      const response = await fetch(videoUrl);
+      const headersObj: Record<string, string> = {};
+      response.headers.forEach((val, key) => {
+        headersObj[key] = val;
+      });
+      res.json({
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        headers: headersObj,
+        url: response.url
+      });
+    } catch (err: any) {
+      console.error("Fetch test failed:", err);
+      res.json({
+        error: err.message || String(err),
+        stack: err.stack
+      });
+    }
+  });
 
   app.get("/api/video", async (req, res) => {
     try {

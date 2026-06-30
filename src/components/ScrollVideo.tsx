@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 
 const REMOTE_VIDEO_URL =
-  "https://www.image2url.com/r2/default/videos/1782479002426-81d17bc5-d96b-4f39-aac4-2511994264ab.mp4";
-const LOCAL_PROXY_URL = "/api/video";
+  "https://video.zig.ht/api/videos/file/1782828823690-293268447.mp4";
+const LOCAL_PROXY_URL = "/api/video?v=1782828823690-293268447";
 
 export default function ScrollVideo() {
   const containerRef = useRef<HTMLDivElement>(null);
